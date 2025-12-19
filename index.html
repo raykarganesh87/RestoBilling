@@ -102,7 +102,7 @@
 
   <script>
     // === CONFIG ===
-    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby-lkWE3RgsZ0nvm7G5Rwx9XTV-LpsP1tRmCuQ8ZvxRyOaBcl9fAzlczsXxqtywV9cSdQ/exec'; // <-- PUT YOUR WEB APP URL HERE
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby-lkWE3RgsZ0nvm7G5Rwx9XTV-LpsP1tRmCuQ8ZvxRyOaBcl9fAzlczsXxqtywV9cSdQ/exec'; // 🔴 REPLACE WITH YOUR WEB APP URL
 
     // === ITEM ROWS ===
     function addItemRow() {
@@ -111,7 +111,7 @@
 
       row.innerHTML = `
         <td class="row-index"></td>
-        <td><input type="text" class="item-name" /></td>
+        <td><input type="text" class="item-name" placeholder="e.g. Pizza" /></td>
         <td><input type="number" class="item-qty" min="1" value="1" /></td>
         <td><input type="number" class="item-price" min="0" step="0.01" value="0" /></td>
         <td><button type="button" onclick="removeItemRow(this)">X</button></td>
@@ -152,7 +152,8 @@
         const price = parseFloat(row.querySelector('.item-price').value) || 0;
         subtotal += qty * price;
       });
-      const tax = subtotal * 0;
+      const taxRate = 0.0; // 0% tax
+      const tax = subtotal * taxRate;
       const total = subtotal + tax;
 
       document.getElementById('subtotal').textContent = '₹' + subtotal.toFixed(2);
@@ -168,7 +169,7 @@
         const qty = row.querySelector('.item-qty').value || '0';
         const price = row.querySelector('.item-price').value || '0';
         if (item.trim() !== '') {
-          txt += `${index + 1}. ${item} x ${qty} = ₹${price}\n`;
+          txt += `${index + 1}. ${item} x ${qty} @ ₹${parseFloat(price).toFixed(2)}\n`;
         }
       });
       return txt.trim();
@@ -193,9 +194,9 @@
       const customerName = document.getElementById('customerName').value.trim();
       const phone = document.getElementById('phone').value.trim();
       const tableNumber = document.getElementById('tableNumber').value.trim();
-      const subtotalText = document.getElementById('subtotal').textContent.replace('₹', '').trim();
-      const taxText = document.getElementById('tax').textContent.replace('₹', '').trim();
-      const totalText = document.getElementById('total').textContent.replace('₹', '').trim();
+      const subtotal = parseFloat(document.getElementById('subtotal').textContent.replace(/[^0-9.-]/g, '')) || 0;
+      const tax = parseFloat(document.getElementById('tax').textContent.replace(/[^0-9.-]/g, '')) || 0;
+      const total = parseFloat(document.getElementById('total').textContent.replace(/[^0-9.-]/g, '')) || 0;
       const itemsForSheet = getItemsForSheet();
       const statusDiv = document.getElementById('status');
 
@@ -205,17 +206,16 @@
         return;
       }
 
-      const payload = {
-        date: new Date().toISOString().slice(0, 10), // YYYY-MM-DD
-        customerName,
-        phone,
-        tableNumber,
-        items: itemsForSheet,
-        subtotal: subtotalText,
-        tax: taxText,
-        total: totalText,
-        status: 'Pending'
-      };
+      const formData = new FormData();
+      formData.append('date', new Date().toISOString().split('T')[0]); // YYYY-MM-DD
+      formData.append('customerName', customerName);
+      formData.append('phone', phone);
+      formData.append('tableNumber', tableNumber);
+      formData.append('items', itemsForSheet);
+      formData.append('subtotal', subtotal);
+      formData.append('tax', tax);
+      formData.append('total', total);
+      formData.append('status', 'Pending');
 
       try {
         statusDiv.textContent = 'Saving...';
@@ -223,38 +223,28 @@
 
         const response = await fetch(SCRIPT_URL, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
+          body: formData // ✅ No headers = no CORS preflight!
         });
 
-        // Try to read response; if no-cors is needed you can switch mode
-        let ok = true;
-        try {
-          const resJson = await response.json();
-          ok = resJson && resJson.result === 'success';
-        } catch (e) {
-          // ignore parsing error (e.g., if no-cors)
-        }
+        const result = await response.json();
 
-        if (ok) {
-          statusDiv.textContent = 'Saved to Google Sheet (check Bills tab).';
+        if (result.result === 'success') {
+          statusDiv.textContent = '✅ Saved to Google Sheet!';
           statusDiv.style.color = 'green';
-          // Refresh recent bills
           loadRecentBills();
         } else {
-          statusDiv.textContent = 'Error saving to Google Sheet.';
+          statusDiv.textContent = '❌ Error: ' + (result.message || 'Unknown error');
           statusDiv.style.color = 'red';
         }
 
       } catch (err) {
-        statusDiv.textContent = 'Error saving to Google Sheet: ' + err;
+        console.error('Fetch error:', err);
+        statusDiv.textContent = '❌ Network error: ' + (err.message || 'Check console');
         statusDiv.style.color = 'red';
       }
     }
 
-    // === SEND WHATSAPP (FRESH MESSAGE EACH TIME) ===
+    // === SEND WHATSAPP ===
     function sendWhatsApp() {
       const customerName = document.getElementById('customerName').value.trim();
       const phone = document.getElementById('phone').value.trim();
@@ -267,46 +257,57 @@
       const statusDiv = document.getElementById('status');
 
       if (!customerName || !phone) {
-        statusDiv.textContent = 'Customer name and phone are required to send WhatsApp message.';
+        statusDiv.textContent = 'Customer name and phone are required for WhatsApp.';
         statusDiv.style.color = 'red';
         return;
       }
 
-      let message = '';
+      let message = `*Restaurant Bill*\n\n`;
       message += `Customer: ${customerName}\n`;
-      if (tableNumber) {
-        message += `Table: ${tableNumber}\n`;
-      }
-      message += `\nOrder:\n`;
+      if (tableNumber) message += `Table: ${tableNumber}\n`;
+      message += `\n*Order Details:*\n`;
       message += itemsText ? itemsText + '\n\n' : '\n';
       message += `Subtotal: ${subtotal}\n`;
-      message += `Tax: ${tax}\n`;
-      message += `Total: ${total}\n`;
-      message += `\nThank you for your visit!`;
+      message += `Tax (5%): ${tax}\n`;
+      message += `*Total: ${total}*\n\n`;
+      message += `Thank you for dining with us! 🍽️`;
 
       const encodedMessage = encodeURIComponent(message);
-      const cleanPhone = phone.replace(/\s+/g, '');
-      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+      const cleanPhone = phone.replace(/\D/g, ''); // Remove non-digits
 
+      if (cleanPhone.length < 10) {
+        statusDiv.textContent = 'Please enter a valid phone number (10+ digits).';
+        statusDiv.style.color = 'red';
+        return;
+      }
+
+      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
       window.open(whatsappUrl, '_blank');
     }
 
-    // === LOAD RECENT BILLS FROM SHEET ===
+    // === LOAD RECENT BILLS ===
     async function loadRecentBills() {
       const tbody = document.getElementById('recentBillsBody');
-      tbody.innerHTML = '<tr><td colspan="7">Loading...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Loading...</td></tr>';
 
       try {
         const res = await fetch(SCRIPT_URL);
-        const data = await res.json(); // array of arrays
+        const data = await res.json();
 
-        const rows = data.slice(1); // skip header
-        const lastRows = rows.slice(-20).reverse(); // last 20, newest first
+        let rows = [];
+        if (Array.isArray(data)) {
+          rows = data.slice(1); // assume raw 2D array
+        } else if (data.result === 'success' && Array.isArray(data.data)) {
+          // If doGet returns { result, data }
+          const allData = data.data;
+          rows = Array.isArray(allData[0]) ? allData.slice(1) : [];
+        }
 
+        const lastRows = rows.slice(-20).reverse();
         tbody.innerHTML = '';
 
         if (lastRows.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7">No bills found.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No bills yet.</td></tr>';
           return;
         }
 
@@ -325,43 +326,27 @@
 
           const tr = document.createElement('tr');
           tr.innerHTML = `
-            <td>${formatDateCell(date)}</td>
+            <td>${date ? new Date(date).toISOString().split('T')[0] : ''}</td>
             <td>${customerName || ''}</td>
             <td>${phone || ''}</td>
             <td>${tableNumber || ''}</td>
-            <td>₹${Number(total || 0).toFixed(2)}</td>
-            <td>${status || ''}</td>
-            <td><button type="button" onclick="viewBillDetails('${escapeForAttr(items)}')">View</button></td>
+            <td>₹${(Number(total) || 0).toFixed(2)}</td>
+            <td>${status || 'Pending'}</td>
+            <td><button type="button" onclick="viewBillDetails(${JSON.stringify(items || '')})">View</button></td>
           `;
           tbody.appendChild(tr);
         });
 
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="7">Error loading bills: ${err}</td></tr>`;
+        console.error('Load bills error:', err);
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">Failed to load bills.</td></tr>`;
       }
     }
 
-    function formatDateCell(value) {
-      if (!value) return '';
-      try {
-        const d = new Date(value);
-        if (!isNaN(d.getTime())) {
-          return d.toISOString().slice(0, 10);
-        }
-      } catch (e) {}
-      return value;
-    }
-
-    function escapeForAttr(text) {
-      if (!text) return '';
-      return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
     function viewBillDetails(items) {
-      alert('Items:\n' + items.replace(/\\n/g, '\n'));
+      alert('Items:\n\n' + (items || 'No items'));
     }
 
-    // === RESET FORM FOR NEW BILL ===
     function resetBillForm() {
       document.getElementById('bill-form').reset();
       document.querySelector('#itemsTable tbody').innerHTML = '';
@@ -372,7 +357,7 @@
       addItemRow();
     }
 
-    // Initialize with one row and load recent bills
+    // Initialize
     window.addEventListener('load', () => {
       addItemRow();
       loadRecentBills();
