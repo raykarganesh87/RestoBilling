@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Restaurant Billing System</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background:#f5f5f5; }
+    h1, h2 { text-align: center; }
+    .container { max-width: 900px; margin: 0 auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+    label { display:block; margin-top:10px; font-weight:bold; }
+    input, select, button, textarea { margin-top:5px; padding:8px; font-size:14px; }
+    input, select, textarea { width:100%; box-sizing:border-box; }
+    table { width:100%; border-collapse: collapse; margin-top:10px; }
+    th, td { border:1px solid #ddd; padding:8px; text-align:left; }
+    th { background:#eee; }
+    .btn-row { margin-top:15px; display:flex; gap:10px; flex-wrap:wrap; }
+    .btn-row button { flex:1; min-width:150px; cursor:pointer; }
+    .totals { margin-top:10px; text-align:right; }
+    .totals div { margin-top:5px; }
+    .status-msg { margin-top:10px; font-weight:bold; }
+    .recent-bills { margin-top:30px; }
+    .small { font-size:12px; color:#666; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Restaurant Billing System</h1>
+
+    <h2>Create New Bill</h2>
+
+    <form id="bill-form" onsubmit="return false;">
+      <label for="customerName">Customer Name *</label>
+      <input type="text" id="customerName" required />
+
+      <label for="phone">Phone Number (WhatsApp) *</label>
+      <input type="text" id="phone" placeholder="+91XXXXXXXXXX" required />
+
+      <label for="tableNumber">Table Number</label>
+      <input type="text" id="tableNumber" />
+
+      <h3>Order Items</h3>
+      <table id="itemsTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Item Name</th>
+            <th>Quantity</th>
+            <th>Price (₹)</th>
+            <th>Remove</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Items will be added here -->
+        </tbody>
+      </table>
+      <button type="button" onclick="addItemRow()">Add Item</button>
+
+      <div class="totals">
+        <div>Subtotal: <span id="subtotal">₹0.00</span></div>
+        <div>Tax (5%): <span id="tax">₹0.00</span></div>
+        <div><strong>Total: <span id="total">₹0.00</span></strong></div>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" onclick="saveToGoogleSheet()">Save to Google Sheets</button>
+        <button type="button" onclick="sendWhatsApp()">Send via WhatsApp</button>
+        <button type="button" onclick="resetBillForm()">New Bill</button>
+      </div>
+
+      <div id="status" class="status-msg"></div>
+    </form>
+
+    <h3>How to Set Up Google Sheets Integration</h3>
+    <p class="small">
+      1. Create a Google Sheet with columns: Date, Customer Name, Phone, Table, Items, Subtotal, Tax, Total, Status.<br />
+      2. Deploy the provided Google Apps Script as a Web App.<br />
+      3. Update the <code>SCRIPT_URL</code> variable in this HTML file with your Web App URL.<br />
+      4. Allow "Anyone" access in Web App deployment settings.
+    </p>
+
+    <div class="recent-bills">
+      <h2>Recent Bills</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Customer</th>
+            <th>Phone</th>
+            <th>Table</th>
+            <th>Total</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="recentBillsBody">
+          <!-- Recent bills will be loaded from Google Sheet -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // === CONFIG ===
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzE-aI5ZGUxEDcqTybIGsvWh4cElRiCo3ortoP2FuFybP4cY0NzugnY0FN9YebV9ix9cw/exec'; // <-- PUT YOUR WEB APP URL HERE
+
+    // === ITEM ROWS ===
+    function addItemRow() {
+      const tbody = document.querySelector('#itemsTable tbody');
+      const row = document.createElement('tr');
+
+      row.innerHTML = `
+        <td class="row-index"></td>
+        <td><input type="text" class="item-name" /></td>
+        <td><input type="number" class="item-qty" min="1" value="1" /></td>
+        <td><input type="number" class="item-price" min="0" step="0.01" value="0" /></td>
+        <td><button type="button" onclick="removeItemRow(this)">X</button></td>
+      `;
+
+      tbody.appendChild(row);
+      updateRowIndexes();
+      attachItemEvents(row);
+      calculateTotals();
+    }
+
+    function removeItemRow(button) {
+      const row = button.closest('tr');
+      row.parentNode.removeChild(row);
+      updateRowIndexes();
+      calculateTotals();
+    }
+
+    function updateRowIndexes() {
+      const rows = document.querySelectorAll('#itemsTable tbody tr');
+      rows.forEach((row, index) => {
+        row.querySelector('.row-index').textContent = index + 1;
+      });
+    }
+
+    function attachItemEvents(row) {
+      const qtyInput = row.querySelector('.item-qty');
+      const priceInput = row.querySelector('.item-price');
+      qtyInput.addEventListener('input', calculateTotals);
+      priceInput.addEventListener('input', calculateTotals);
+    }
+
+    function calculateTotals() {
+      const rows = document.querySelectorAll('#itemsTable tbody tr');
+      let subtotal = 0;
+      rows.forEach(row => {
+        const qty = parseFloat(row.querySelector('.item-qty').value) || 0;
+        const price = parseFloat(row.querySelector('.item-price').value) || 0;
+        subtotal += qty * price;
+      });
+      const tax = subtotal * 0;
+      const total = subtotal + tax;
+
+      document.getElementById('subtotal').textContent = '₹' + subtotal.toFixed(2);
+      document.getElementById('tax').textContent = '₹' + tax.toFixed(2);
+      document.getElementById('total').textContent = '₹' + total.toFixed(2);
+    }
+
+    function getItemsText() {
+      const rows = document.querySelectorAll('#itemsTable tbody tr');
+      let txt = '';
+      rows.forEach((row, index) => {
+        const item = row.querySelector('.item-name').value || '';
+        const qty = row.querySelector('.item-qty').value || '0';
+        const price = row.querySelector('.item-price').value || '0';
+        if (item.trim() !== '') {
+          txt += `${index + 1}. ${item} x ${qty} = ₹${price}\n`;
+        }
+      });
+      return txt.trim();
+    }
+
+    function getItemsForSheet() {
+      const rows = document.querySelectorAll('#itemsTable tbody tr');
+      let arr = [];
+      rows.forEach(row => {
+        const item = row.querySelector('.item-name').value || '';
+        const qty = row.querySelector('.item-qty').value || '0';
+        const price = row.querySelector('.item-price').value || '0';
+        if (item.trim() !== '') {
+          arr.push(`${item} x ${qty} = ₹${price}`);
+        }
+      });
+      return arr.join(' | ');
+    }
+
+    // === SAVE TO GOOGLE SHEET ===
+    async function saveToGoogleSheet() {
+      const customerName = document.getElementById('customerName').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const tableNumber = document.getElementById('tableNumber').value.trim();
+      const subtotalText = document.getElementById('subtotal').textContent.replace('₹', '').trim();
+      const taxText = document.getElementById('tax').textContent.replace('₹', '').trim();
+      const totalText = document.getElementById('total').textContent.replace('₹', '').trim();
+      const itemsForSheet = getItemsForSheet();
+      const statusDiv = document.getElementById('status');
+
+      if (!customerName || !phone) {
+        statusDiv.textContent = 'Customer name and phone are required.';
+        statusDiv.style.color = 'red';
+        return;
+      }
+
+      const payload = {
+        date: new Date().toISOString().slice(0, 10), // YYYY-MM-DD
+        customerName,
+        phone,
+        tableNumber,
+        items: itemsForSheet,
+        subtotal: subtotalText,
+        tax: taxText,
+        total: totalText,
+        status: 'Pending'
+      };
+
+      try {
+        statusDiv.textContent = 'Saving...';
+        statusDiv.style.color = 'black';
+
+        const response = await fetch(SCRIPT_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        // Try to read response; if no-cors is needed you can switch mode
+        let ok = true;
+        try {
+          const resJson = await response.json();
+          ok = resJson && resJson.result === 'success';
+        } catch (e) {
+          // ignore parsing error (e.g., if no-cors)
+        }
+
+        if (ok) {
+          statusDiv.textContent = 'Saved to Google Sheet (check Bills tab).';
+          statusDiv.style.color = 'green';
+          // Refresh recent bills
+          loadRecentBills();
+        } else {
+          statusDiv.textContent = 'Error saving to Google Sheet.';
+          statusDiv.style.color = 'red';
+        }
+
+      } catch (err) {
+        statusDiv.textContent = 'Error saving to Google Sheet: ' + err;
+        statusDiv.style.color = 'red';
+      }
+    }
+
+    // === SEND WHATSAPP (FRESH MESSAGE EACH TIME) ===
+    function sendWhatsApp() {
+      const customerName = document.getElementById('customerName').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const tableNumber = document.getElementById('tableNumber').value.trim();
+      const subtotal = document.getElementById('subtotal').textContent;
+      const tax = document.getElementById('tax').textContent;
+      const total = document.getElementById('total').textContent;
+      const itemsText = getItemsText();
+
+      const statusDiv = document.getElementById('status');
+
+      if (!customerName || !phone) {
+        statusDiv.textContent = 'Customer name and phone are required to send WhatsApp message.';
+        statusDiv.style.color = 'red';
+        return;
+      }
+
+      let message = '';
+      message += `Customer: ${customerName}\n`;
+      if (tableNumber) {
+        message += `Table: ${tableNumber}\n`;
+      }
+      message += `\nOrder:\n`;
+      message += itemsText ? itemsText + '\n\n' : '\n';
+      message += `Subtotal: ${subtotal}\n`;
+      message += `Tax: ${tax}\n`;
+      message += `Total: ${total}\n`;
+      message += `\nThank you for your visit!`;
+
+      const encodedMessage = encodeURIComponent(message);
+      const cleanPhone = phone.replace(/\s+/g, '');
+      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+
+      window.open(whatsappUrl, '_blank');
+    }
+
+    // === LOAD RECENT BILLS FROM SHEET ===
+    async function loadRecentBills() {
+      const tbody = document.getElementById('recentBillsBody');
+      tbody.innerHTML = '<tr><td colspan="7">Loading...</td></tr>';
+
+      try {
+        const res = await fetch(SCRIPT_URL);
+        const data = await res.json(); // array of arrays
+
+        const rows = data.slice(1); // skip header
+        const lastRows = rows.slice(-20).reverse(); // last 20, newest first
+
+        tbody.innerHTML = '';
+
+        if (lastRows.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7">No bills found.</td></tr>';
+          return;
+        }
+
+        lastRows.forEach(row => {
+          const [
+            date,
+            customerName,
+            phone,
+            tableNumber,
+            items,
+            subtotal,
+            tax,
+            total,
+            status
+          ] = row;
+
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${formatDateCell(date)}</td>
+            <td>${customerName || ''}</td>
+            <td>${phone || ''}</td>
+            <td>${tableNumber || ''}</td>
+            <td>₹${Number(total || 0).toFixed(2)}</td>
+            <td>${status || ''}</td>
+            <td><button type="button" onclick="viewBillDetails('${escapeForAttr(items)}')">View</button></td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7">Error loading bills: ${err}</td></tr>`;
+      }
+    }
+
+    function formatDateCell(value) {
+      if (!value) return '';
+      try {
+        const d = new Date(value);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString().slice(0, 10);
+        }
+      } catch (e) {}
+      return value;
+    }
+
+    function escapeForAttr(text) {
+      if (!text) return '';
+      return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function viewBillDetails(items) {
+      alert('Items:\n' + items.replace(/\\n/g, '\n'));
+    }
+
+    // === RESET FORM FOR NEW BILL ===
+    function resetBillForm() {
+      document.getElementById('bill-form').reset();
+      document.querySelector('#itemsTable tbody').innerHTML = '';
+      document.getElementById('subtotal').textContent = '₹0.00';
+      document.getElementById('tax').textContent = '₹0.00';
+      document.getElementById('total').textContent = '₹0.00';
+      document.getElementById('status').textContent = '';
+      addItemRow();
+    }
+
+    // Initialize with one row and load recent bills
+    window.addEventListener('load', () => {
+      addItemRow();
+      loadRecentBills();
+    });
+  </script>
+</body>
+</html>
